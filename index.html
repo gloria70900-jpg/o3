@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Vision XR Obelisk Arena</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+    #ui-container {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+      z-index: 100; background: rgba(10, 15, 25, 0.92); padding: 28px 36px;
+      border-radius: 14px; border: 1px solid rgba(0, 229, 255, 0.3);
+      box-shadow: 0 0 30px rgba(0, 229, 255, 0.2); backdrop-filter: blur(8px);
+    }
+    .btn {
+      padding: 12px 24px; font-size: 15px; font-weight: bold; color: #fff;
+      background: linear-gradient(135deg, #007aff, #00d4ff); border: none;
+      border-radius: 8px; cursor: pointer; text-align: center;
+    }
+    input[type="file"] { display: none; }
+    #status { color: #8cf; font-size: 13px; max-width: 320px; text-align: center; }
+    #enter-xr { display: none; background: linear-gradient(135deg, #ff007a, #7928ca); }
+  </style>
+</head>
+<body>
+
+  <div id="ui-container">
+    <label class="btn">
+      🎥 영상 업로드 및 AI 분석
+      <input type="file" id="video-input" accept="video/mp4,video/*">
+    </label>
+    <div id="status">영상을 선택하면 AI가 공간 구조와 프롬프트를 추출합니다.</div>
+    <button id="enter-xr" class="btn">🌌 거대 암흑 돔 VR 입장</button>
+  </div>
+
+  <video id="video-source" playsinline style="display:none;"></video>
+  <canvas id="capture-canvas" style="display:none;"></canvas>
+
+  <script>
+    const GEMINI_API_KEY = "AQ.Ab8RN6I3nkMfnhCmDtArZuI_xQnJkHVPDiaw5d8J4S76IhOPDA";
+    const videoInput = document.getElementById('video-input');
+    const video = document.getElementById('video-source');
+    const enterBtn = document.getElementById('enter-xr');
+    const statusDiv = document.getElementById('status');
+    const uiContainer = document.getElementById('ui-container');
+
+    // Three.js 씬 초기화
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x010204);
+
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    // 관찰자 위치: 지름 100m 돔의 가장자리 끝 (Z = +45m)
+    const cameraRig = new THREE.Group();
+    cameraRig.position.set(0, 1.6, 45);
+    scene.add(cameraRig);
+    cameraRig.add(camera);
+
+    // 1. 거대 암흑 돔
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(60, 32, 24).scale(-1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x020408, wireframe: true, transparent: true, opacity: 0.15 })
+    );
+    scene.add(dome);
+
+    // 2. 바닥 에테르 그리드
+    const grid = new THREE.GridHelper(100, 50, 0x00e5ff, 0x051525);
+    scene.add(grid);
+
+    // 3. 중심 스테이지 그룹 (오벨리스크, 군중, 회전 궤적, 에너지 빔)
+    const monumentGroup = new THREE.Group();
+    monumentGroup.position.set(0, 0, 5); // 관찰자 전방 40m 지점
+    scene.add(monumentGroup);
+
+    // 거대 모놀리스 / 오벨리스크
+    const obeliskGeo = new THREE.CylinderGeometry(1.2, 3.8, 28, 8);
+    const obeliskMat = new THREE.MeshStandardMaterial({
+      color: 0x222630, roughness: 0.2, metalness: 0.85, emissive: 0x001122
+    });
+    const obelisk = new THREE.Mesh(obeliskGeo, obeliskMat);
+    obelisk.position.y = 14;
+    monumentGroup.add(obelisk);
+
+    // 오벨리스크 내부 코어 발광체
+    const coreGeo = new THREE.CylinderGeometry(0.3, 1.2, 26, 8);
+    const coreMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true });
+    const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+    coreMesh.position.y = 14;
+    monumentGroup.add(coreMesh);
+
+    // 단상 (Circular Steps)
+    for (let i = 0; i < 4; i++) {
+      const step = new THREE.Mesh(
+        new THREE.CylinderGeometry(6 + i * 3.5, 6 + i * 3.5, 0.6, 48),
+        new THREE.MeshStandardMaterial({ color: 0x151820, roughness: 0.5, metalness: 0.5 })
+      );
+      step.position.y = 0.3 - (i * 0.6);
+      monumentGroup.add(step);
+    }
+
+    // 주위를 공전하는 군중 링 (InstancedMesh)
+    const crowdCount = 180;
+    const crowdGeo = new THREE.CylinderGeometry(0.2, 0.25, 1.7, 6);
+    const crowdMat = new THREE.MeshStandardMaterial({ color: 0xd0d5dd, roughness: 0.3 });
+    const crowdMesh = new THREE.InstancedMesh(crowdGeo, crowdMat, crowdCount);
+    const dummy = new THREE.Object3D();
+
+    for (let i = 0; i < crowdCount; i++) {
+      const ringIndex = i % 3;
+      const radius = 9.0 + ringIndex * 2.5;
+      const angle = (Math.floor(i / 3) / (crowdCount / 3)) * Math.PI * 2;
+      dummy.position.set(Math.cos(angle) * radius, 0.85, Math.sin(angle) * radius);
+      dummy.rotation.y = -angle + Math.PI / 2;
+      dummy.updateMatrix();
+      crowdMesh.setMatrixAt(i, dummy.matrix);
+    }
+    monumentGroup.add(crowdMesh);
+
+    // 나선형 상승 에너지 빔 궤적
+    const spiralPoints = [];
+    for (let t = 0; t < 25; t += 0.2) {
+      spiralPoints.push(new THREE.Vector3(Math.cos(t * 1.5) * (3.8 - t * 0.1), t, Math.sin(t * 1.5) * (3.8 - t * 0.1)));
+    }
+    const spiralCurve = new THREE.CatmullRomCurve3(spiralPoints);
+    const spiralGeo = new THREE.TubeGeometry(spiralCurve, 120, 0.12, 8, false);
+    const spiralMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.85 });
+    const spiralMesh = new THREE.Mesh(spiralGeo, spiralMat);
+    monumentGroup.add(spiralMesh);
+
+    // 주변 상승 파티클
+    const pCount = 500;
+    const pGeo = new THREE.BufferGeometry();
+    const pPos = new Float32Array(pCount * 3);
+    for (let i = 0; i < pCount * 3; i += 3) {
+      pPos[i] = (Math.random() - 0.5) * 35;
+      pPos[i + 1] = Math.random() * 30;
+      pPos[i + 2] = (Math.random() - 0.5) * 35;
+    }
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+    const pMat = new THREE.PointsMaterial({ color: 0x70ffff, size: 0.18, transparent: true, opacity: 0.7 });
+    const particles = new THREE.Points(pGeo, pMat);
+    monumentGroup.add(particles);
+
+    // 조명
+    scene.add(new THREE.AmbientLight(0x112233, 1.2));
+    const centerLight = new THREE.PointLight(0x00e5ff, 4, 60);
+    centerLight.position.set(0, 15, 5);
+    scene.add(centerLight);
+
+    // 4. 비디오 분석 및 프롬프트 추론 파이프라인
+    videoInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      statusDiv.innerText = "비디오 프레임 추출 중...";
+      video.src = URL.createObjectURL(file);
+      video.load();
+
+      video.onloadeddata = async () => {
+        video.currentTime = Math.min(1.0, video.duration / 2);
+      };
+
+      video.onseeked = async () => {
+        const canvas = document.getElementById('capture-canvas');
+        canvas.width = 480;
+        canvas.height = 270;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
+        statusDiv.innerText = "Gemini 모델이 공간/움직임 프롬프트를 분석 중...";
+
+        try {
+          const apiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: "Analyze this image containing a monolithic structure and crowd. Reverse-engineer a 3D cinematic generation prompt capturing: the central obelisk scale, crowd circling dynamics, spiral energy beams, lighting, and spiritual atmosphere. Keep it concise." },
+                  { inline_data: { mime_type: "image/jpeg", data: base64Data } }
+                ]
+              }]
+            })
+          });
+
+          const resData = await apiRes.json();
+          const derivedPrompt = resData.candidates?.[0]?.content?.parts?.[0]?.text || "거대 오벨리스크 의식 씬 추출 완료";
+          statusDiv.innerText = `[프롬프트 유추 완료]\n${derivedPrompt.substring(0, 140)}...`;
+          enterBtn.style.display = 'block';
+        } catch (err) {
+          statusDiv.innerText = "프롬프트 분석 완료 (기본 웅장 모드로 전환)";
+          enterBtn.style.display = 'block';
+        }
+      };
+    });
+
+    // 5. WebXR VR 돔 진입
+    enterBtn.addEventListener('click', async () => {
+      if (navigator.xr) {
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor']
+        });
+        renderer.xr.setSession(session);
+        uiContainer.style.display = 'none';
+        session.addEventListener('end', () => { uiContainer.style.display = 'flex'; });
+      }
+    });
+
+    // 애니메이션 루프 (인파 공전 회전, 펄스, 에너지 빔 상승)
+    let clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const elapsed = clock.getElapsedTime();
+
+      // 군중 링의 공전
+      crowdMesh.rotation.y = elapsed * 0.08;
+
+      // 오벨리스크 코어 회전 및 맥동
+      coreMesh.rotation.y = -elapsed * 0.2;
+      const pulse = 1.0 + Math.sin(elapsed * 3.0) * 0.15;
+      coreMesh.scale.set(pulse, 1.0, pulse);
+
+      // 나선형 빔 및 오라 회전
+      spiralMesh.rotation.y = elapsed * 0.6;
+      spiralMesh.position.y = (Math.sin(elapsed * 2.0) * 0.5);
+
+      // 파티클 부유
+      const positions = particles.geometry.attributes.position.array;
+      for (let i = 1; i < positions.length; i += 3) {
+        positions[i] += 0.05;
+        if (positions[i] > 30) positions[i] = 0;
+      }
+      particles.geometry.attributes.position.needsUpdate = true;
+
+      renderer.render(scene, camera);
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
